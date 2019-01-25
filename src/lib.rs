@@ -1,39 +1,39 @@
-#[derive(Clone)]
-pub struct StrokeParams {
-    pub inner_color: Color,
-    pub outer_color: Color,
+pub trait CanvasRenderer: StrokeRenderer {}
+
+pub trait StrokeRenderer {
+    fn render(&mut self, stroke: Stroke);
 }
 
-pub trait CanvasRenderer {
-    fn render_stroke(&mut self, paths: PathsRef, params: StrokeParams);
+pub struct Stroke<'a> {
+    color: Color,
+    cache: &'a PathCache,
+}
+
+impl<'a> Stroke<'a> {
+    pub fn path_iter(&self) -> impl Iterator<Item=Path> {
+        PathIter {
+            cache: self.cache,
+            index: 0,
+            stroke: true,
+        }
+    }
+
+    pub fn color(&self) -> Color {
+        self.color
+    }
 }
 
 #[derive(Copy, Clone)]
 pub struct Color {
-    pub r: Scalar,
-    pub g: Scalar,
-    pub b: Scalar,
-    pub a: Scalar,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
 }
 
 impl Color {
-    pub fn rgba(r: Scalar, g: Scalar, b: Scalar, a: Scalar) -> Color {
+    pub fn srgba(r: u8, g: u8, b: u8, a: u8) -> Color {
         Color { r, g, b, a }
-    }
-}
-
-pub struct PathsRef<'a> {
-    cache: &'a PathCache,
-    stroke: bool,
-}
-
-impl<'a> PathsRef<'a> {
-    pub fn iter(&self) -> impl Iterator<Item=Path> {
-        PathIter {
-            cache: self.cache,
-            index: 0,
-            stroke: self.stroke,
-        }
     }
 }
 
@@ -114,6 +114,7 @@ pub struct Canvas {
     cache: PathCache,
     pixels_per_point: Scalar,
     tess_tol: Scalar,
+    dist_tol: Scalar,
     fringe: Scalar,
 }
 
@@ -125,6 +126,7 @@ impl Canvas {
             cache: PathCache::new(),
             pixels_per_point: 0.0,
             tess_tol: 0.0,
+            dist_tol: 0.0,
             fringe: 0.0,
         };
 
@@ -136,7 +138,7 @@ impl Canvas {
     pub fn set_pixels_per_point(&mut self, pixels_per_point: Scalar) {
         self.pixels_per_point = pixels_per_point;
         self.tess_tol = 0.25 / pixels_per_point;
-//        self.dist_tol = 0.01 / pixels_per_point;
+        self.dist_tol = 0.01 / pixels_per_point;
         self.fringe = 1.0 / pixels_per_point;
     }
 
@@ -161,29 +163,39 @@ impl Canvas {
         self.state.shape_anti_alias = enabled;
     }
 
-    pub fn begin_path(&mut self) {
+    pub fn begin_path(&mut self) -> &mut Self {
         self.commands.clear();
         self.cache.clear();
+        self
     }
 
-    pub fn move_to(&mut self, x: Scalar, y: Scalar) {
-        self.commands.push(Command::MoveTo(x, y))
+    pub fn move_to(&mut self, x: Scalar, y: Scalar) -> &mut Self {
+        self.commands.push(Command::MoveTo(x, y));
+        self
     }
 
-    pub fn line_to(&mut self, x: Scalar, y: Scalar) {
-        self.commands.push(Command::LineTo(x, y))
+    pub fn line_to(&mut self, x: Scalar, y: Scalar) -> &mut Self {
+        self.commands.push(Command::LineTo(x, y));
+        self
     }
 
-    pub fn bezier_to(&mut self, cp1x: Scalar, cp1y: Scalar, cp2x: Scalar, cp2y: Scalar, x: Scalar, y: Scalar) {
-        self.commands.push(Command::BezierTo(cp1x, cp1y, cp2x, cp2y, x, y))
+    pub fn bezier_to(&mut self, cp1x: Scalar, cp1y: Scalar, cp2x: Scalar, cp2y: Scalar, x: Scalar, y: Scalar) -> &mut Self {
+        self.commands.push(Command::BezierTo(cp1x, cp1y, cp2x, cp2y, x, y));
+        self
     }
 
-    pub fn close_path(&mut self) {
-        self.commands.push(Command::Close)
+    pub fn close_path(&mut self) -> &mut Self {
+        self.commands.push(Command::Close);
+        self
     }
 
-    pub fn stroke<R>(&mut self, renderer: &mut R) where R: CanvasRenderer {
-        self.cache.flatten_paths(self.commands.iter(), self.tess_tol);
+    pub fn path_winding(&mut self, winding: Winding) -> &mut Self {
+        self.commands.push(Command::Winding(winding));
+        self
+    }
+
+    pub fn stroke<R>(&mut self, renderer: &mut R) where R: StrokeRenderer {
+        self.cache.flatten_paths(self.commands.iter(), self.tess_tol, self.dist_tol);
         let state = &self.state;
 
         let fringe = if state.shape_anti_alias {
@@ -193,11 +205,11 @@ impl Canvas {
         };
         self.cache.expand_stroke(state.line_width * 0.5, fringe, state.line_cap, state.line_join, state.miter_limit, self.tess_tol);
 
-        let params = StrokeParams {
-            inner_color: self.state.paint.inner_color,
-            outer_color: self.state.paint.outer_color,
+        let stroke = Stroke {
+            color: self.state.paint.outer_color,
+            cache: &self.cache,
         };
-        renderer.render_stroke(PathsRef { cache: &self.cache, stroke: true }, params);
+        renderer.render(stroke);
     }
 }
 
@@ -212,7 +224,6 @@ enum Command {
     LineTo(Scalar, Scalar),
     BezierTo(Scalar, Scalar, Scalar, Scalar, Scalar, Scalar),
     Close,
-    #[allow(dead_code)]
     Winding(Winding),
 }
 
@@ -233,8 +244,8 @@ impl Default for State {
             line_join: LineJoin::Miter,
             miter_limit: 10.0,
             paint: Paint {
-                inner_color: Color::rgba(0.0, 0.0, 0.0, 0.0),
-                outer_color: Color::rgba(0.0, 0.0, 0.0, 0.0),
+                inner_color: Color::srgba(0, 0, 0, 255),
+                outer_color: Color::srgba(0, 0, 0, 255),
             },
             shape_anti_alias: true
         }
@@ -279,15 +290,19 @@ impl PathCache {
         }
     }
 
-    fn flatten_paths<'a, T>(&mut self, iter: T, tol: Scalar) where T: Iterator<Item=&'a Command> {
+    fn flatten_paths<'a, T>(&mut self, iter: T, tess_tol: Scalar, dist_tol: Scalar) where T: Iterator<Item=&'a Command> {
         for command in iter {
             match *command {
                 Command::MoveTo(x, y) => {
                     self.add_path();
-                    self.add_point(x, y, POINT_CORNER, tol);
+                    self.add_point(x, y, POINT_CORNER, dist_tol);
                 }
-                Command::LineTo(x, y) => self.add_point(x, y, POINT_CORNER, tol),
-                Command::BezierTo(..) => unimplemented!(),
+                Command::LineTo(x, y) => self.add_point(x, y, POINT_CORNER, dist_tol),
+                Command::BezierTo(cp1x, cp1y, cp2x, cp2y, x, y) => {
+                    if let Some(last) = self.points.last() {
+                        self.tesselate_bezier(last.x,last.y, cp1x,cp1y, cp2x,cp2y, x, y, 0, POINT_CORNER, tess_tol, dist_tol);
+                    }
+                },
                 Command::Close => self.close_path(),
                 Command::Winding(winding) => self.path_winding(winding),
             }
@@ -304,7 +319,7 @@ impl PathCache {
             // If the first and last points are the same, remove the last, mark as closed path.
             let p0 = &points[path.count - 1];
             let p1 = &points[0];
-            if point_equals(p0.x, p0.y, p1.x, p1.y, tol) {
+            if point_equals(p0.x, p0.y, p1.x, p1.y, dist_tol) {
                 path.count = path.count - 1;
                 path.closed = true;
                 points = &mut self.points[path.first..(path.first + path.count)];
@@ -343,7 +358,40 @@ impl PathCache {
         }
     }
 
-    fn expand_stroke(&mut self, mut w: Scalar, fringe: Scalar, line_cap: LineCap, line_join: LineJoin, miter_limit: Scalar, tol: Scalar) {
+    fn tesselate_bezier(&mut self, x1: Scalar, y1: Scalar, x2: Scalar, y2: Scalar, x3: Scalar, y3: Scalar, x4: Scalar, y4: Scalar, level: u32, flags: u32, tess_tol: Scalar, dist_tol: Scalar) {
+        if level > 10 {
+            return
+        }
+
+        let x12 = (x1 + x2) * 0.5;
+        let y12 = (y1 + y2) * 0.5;
+        let x23 = (x2 + x3) * 0.5;
+        let y23 = (y2 + y3) * 0.5;
+        let x34 = (x3 + x4) * 0.5;
+        let y34 = (y3 + y4) * 0.5;
+        let x123 = (x12 + x23) * 0.5;
+        let y123 = (y12 + y23) * 0.5;
+
+        let dx = x4 - x1;
+        let dy = y4 - y1;
+        let d2 = ((x2 - x4) * dy - (y2 - y4) * dx).abs();
+        let d3 = ((x3 - x4) * dy - (y3 - y4) * dx).abs();
+
+        if (d2 + d3) * (d2 + d3) < tess_tol * (dx * dx + dy * dy) {
+            self.add_point(x4, y4, flags, dist_tol);
+            return;
+        }
+
+        let x234 = (x23 + x34) * 0.5;
+        let y234 = (y23 + y34) * 0.5;
+        let x1234 = (x123 + x234) * 0.5;
+        let y1234 = (y123 + y234) * 0.5;
+
+        self.tesselate_bezier(x1, y1, x12, y12, x123, y123, x1234, y1234, level + 1, 0, tess_tol, dist_tol);
+        self.tesselate_bezier(x1234, y1234, x234, y234, x34, y34, x4, y4, level + 1, flags, tess_tol, dist_tol);
+    }
+
+    fn expand_stroke(&mut self, mut w: Scalar, fringe: Scalar, line_cap: LineCap, line_join: LineJoin, miter_limit: Scalar, tess_tol: Scalar) {
         let aa = fringe;
         let (u0, u1) = if aa == 0.0 {
             // Disable the gradient used for antialiasing when antialiasing is not used.
@@ -351,7 +399,7 @@ impl PathCache {
         } else {
             (0.0, 1.0)
         };
-        let ncap = curve_divs(w, PI, tol);	 // Calculate divisions per half circle.
+        let ncap = curve_divs(w, PI, tess_tol);	 // Calculate divisions per half circle.
 
         w += aa * 0.5;
 
@@ -530,12 +578,12 @@ impl PathCache {
         self.paths.push(path);
     }
 
-    fn add_point(&mut self, x: Scalar, y: Scalar, flags: u32, tol: Scalar) {
+    fn add_point(&mut self, x: Scalar, y: Scalar, flags: u32, dist_tol: Scalar) {
         if let Some(path) = self.paths.last_mut() {
             // If the incoming and last points are the same, merge them
             if path.count > 0 && self.points.len() > 0 {
                 let last_point = self.points.last_mut().unwrap();
-                if point_equals(last_point.x, last_point.y, x, y, tol) {
+                if point_equals(last_point.x, last_point.y, x, y, dist_tol) {
                     last_point.flags = last_point.flags | flags;
                     return;
                 }
