@@ -416,8 +416,8 @@ impl PathCache {
 
                 match line_cap {
                     LineCap::Butt => butt_cap_start(verts, p0, dx, dy, w, -aa * 0.5, aa, u0, u1),
-                    LineCap::Square => unimplemented!(),
-                    LineCap::Round => unimplemented!(),
+                    LineCap::Square => butt_cap_start(verts, p0, dx, dy, w, w - aa, aa, u0, u1),
+                    LineCap::Round => round_cap_start(verts, p0, dx, dy, w, ncap, aa, u0, u1),
                 }
             }
 
@@ -429,8 +429,8 @@ impl PathCache {
                         bevel_join(verts, p0, p1, w, w, u0, u1, aa);
                     }
                 } else {
-                    append_vertex(verts, p1.x + (p1.dmx * w), p1.y + (p1.dmy * w), u0, 1.0);
-                    append_vertex(verts, p1.x - (p1.dmx * w), p1.y - (p1.dmy * w), u1, 1.0);
+                    add_vert(verts, p1.x + (p1.dmx * w), p1.y + (p1.dmy * w), u0, 1.0);
+                    add_vert(verts, p1.x - (p1.dmx * w), p1.y - (p1.dmy * w), u1, 1.0);
                 }
                 p0 = p1;
                 p1_index = p1_index + 1;
@@ -439,15 +439,15 @@ impl PathCache {
 
             if is_loop {
                 // Loop it
-                append_vertex(verts, verts[0].x, verts[0].y, u0, 1.0);
-                append_vertex(verts, verts[1].x, verts[1].y, u1, 1.0);
+                add_vert(verts, verts[0].x, verts[0].y, u0, 1.0);
+                add_vert(verts, verts[1].x, verts[1].y, u1, 1.0);
             } else {
                 // Add cap
                 let (dx, dy, _) = normalize(p1.x - p0.x, p1.y - p0.y);
                 match line_cap {
                     LineCap::Butt => butt_cap_end(verts, p1, dx, dy, w, -aa * 0.5, aa, u0, u1),
-                    LineCap::Square => unimplemented!(),
-                    LineCap::Round => unimplemented!(),
+                    LineCap::Square => butt_cap_end(verts, p1, dx, dy, w, w - aa, aa, u0, u1),
+                    LineCap::Round => round_cap_end(verts, p1, dx, dy, w, ncap, aa, u0, u1),
                 }
             }
 
@@ -582,59 +582,59 @@ fn bevel_join(verts: &mut Vec<Vertex>, p0: &Point, p1: &Point, lw: Scalar, rw: S
 
     if p1.flags & POINT_LEFT != 0 {
         let (lx0, ly0, lx1, ly1) = choose_bevel(p1.flags & POINT_INNER_BEVEL, p0, p1, lw);
-        append_vertex(verts, lx0, ly0, lu, 1.0);
-        append_vertex(verts, p1.x - dlx0 * rw, p1.y - dly0 * rw, ru, 1.0);
+        add_vert(verts, lx0, ly0, lu, 1.0);
+        add_vert(verts, p1.x - dlx0 * rw, p1.y - dly0 * rw, ru, 1.0);
 
         if p1.flags & POINT_BEVEL != 0 {
-            append_vertex(verts, lx0, ly0, lu, 1.0);
-            append_vertex(verts, p1.x - dlx0 * rw, p1.y - dly0 * rw, ru, 1.0);
+            add_vert(verts, lx0, ly0, lu, 1.0);
+            add_vert(verts, p1.x - dlx0 * rw, p1.y - dly0 * rw, ru, 1.0);
 
-            append_vertex(verts, lx1, ly1, lu, 1.0);
-            append_vertex(verts, p1.x - dlx1 * rw, p1.y - dly1 * rw, ru, 1.0);
+            add_vert(verts, lx1, ly1, lu, 1.0);
+            add_vert(verts, p1.x - dlx1 * rw, p1.y - dly1 * rw, ru, 1.0);
         } else {
             let rx0 = p1.x - p1.dmx * rw;
             let ry0 = p1.y - p1.dmy * rw;
 
-            append_vertex(verts, p1.x, p1.y, 0.5, 1.0);
-            append_vertex(verts, p1.x - dlx0 * rw, p1.y - dly0 * rw, ru, 1.0);
+            add_vert(verts, p1.x, p1.y, 0.5, 1.0);
+            add_vert(verts, p1.x - dlx0 * rw, p1.y - dly0 * rw, ru, 1.0);
 
-            append_vertex(verts, rx0, ry0, ru, 1.0);
-            append_vertex(verts, rx0, ry0, ru, 1.0);
+            add_vert(verts, rx0, ry0, ru, 1.0);
+            add_vert(verts, rx0, ry0, ru, 1.0);
 
-            append_vertex(verts, p1.x, p1.y, 0.5, 1.0);
-            append_vertex(verts, p1.x - dlx1 * rw, p1.y - dly1 * rw, ru, 1.0);
+            add_vert(verts, p1.x, p1.y, 0.5, 1.0);
+            add_vert(verts, p1.x - dlx1 * rw, p1.y - dly1 * rw, ru, 1.0);
         }
 
-        append_vertex(verts, lx1, ly1, lu, 1.0);
-        append_vertex(verts, p1.x - dlx1 * rw, p1.y - dly1 * rw, ru, 1.0);
+        add_vert(verts, lx1, ly1, lu, 1.0);
+        add_vert(verts, p1.x - dlx1 * rw, p1.y - dly1 * rw, ru, 1.0);
     } else {
         let (rx0, ry0, rx1, ry1) = choose_bevel(p1.flags & POINT_INNER_BEVEL, p0, p1, -rw);
 
-        append_vertex(verts, p1.x + dlx0 * lw, p1.y + dly0 * lw, lu, 1.0);
-        append_vertex(verts, rx0, ry0, ru, 1.0);
+        add_vert(verts, p1.x + dlx0 * lw, p1.y + dly0 * lw, lu, 1.0);
+        add_vert(verts, rx0, ry0, ru, 1.0);
 
         if p1.flags & POINT_BEVEL != 0 {
-            append_vertex(verts, p1.x + dlx0 * lw, p1.y + dly0 * lw, lu, 1.0);
-            append_vertex(verts, rx0, ry0, ru, 1.0);
+            add_vert(verts, p1.x + dlx0 * lw, p1.y + dly0 * lw, lu, 1.0);
+            add_vert(verts, rx0, ry0, ru, 1.0);
 
-            append_vertex(verts, p1.x + dlx1 * lw, p1.y + dly1 * lw, lu, 1.0);
-            append_vertex(verts, rx1, ry1, ru, 1.0);
+            add_vert(verts, p1.x + dlx1 * lw, p1.y + dly1 * lw, lu, 1.0);
+            add_vert(verts, rx1, ry1, ru, 1.0);
         } else {
             let lx0 = p1.x + p1.dmx * lw;
             let ly0 = p1.y + p1.dmy * lw;
 
-            append_vertex(verts, p1.x + dlx0 * lw, p1.y + dly0 * lw, lu, 1.0);
-            append_vertex(verts, p1.x, p1.y, 0.5, 1.0);
+            add_vert(verts, p1.x + dlx0 * lw, p1.y + dly0 * lw, lu, 1.0);
+            add_vert(verts, p1.x, p1.y, 0.5, 1.0);
 
-            append_vertex(verts, lx0, ly0, lu, 1.0);
-            append_vertex(verts, lx0, ly0, lu, 1.0);
+            add_vert(verts, lx0, ly0, lu, 1.0);
+            add_vert(verts, lx0, ly0, lu, 1.0);
 
-            append_vertex(verts, p1.x + dlx1 * lw, p1.y + dly1 * lw, lu, 1.0);
-            append_vertex(verts, p1.x, p1.y, 0.5, 1.0);
+            add_vert(verts, p1.x + dlx1 * lw, p1.y + dly1 * lw, lu, 1.0);
+            add_vert(verts, p1.x, p1.y, 0.5, 1.0);
         }
 
-        append_vertex(verts, p1.x + dlx1 * lw, p1.y + dly1 * lw, lu, 1.0);
-        append_vertex(verts, rx1, ry1, ru, 1.0);
+        add_vert(verts, p1.x + dlx1 * lw, p1.y + dly1 * lw, lu, 1.0);
+        add_vert(verts, rx1, ry1, ru, 1.0);
     }
 }
 
@@ -656,8 +656,8 @@ fn round_join(verts: &mut Vec<Vertex>, p0: &Point, p1: &Point, lw: Scalar, rw: S
             }
         };
 
-        append_vertex(verts, lx0, ly0, lu,1.0);
-        append_vertex(verts, p1.x - dlx0 * rw, p1.y - dly0 * rw, ru, 1.0);
+        add_vert(verts, lx0, ly0, lu, 1.0);
+        add_vert(verts, p1.x - dlx0 * rw, p1.y - dly0 * rw, ru, 1.0);
 
         let n = clamp((((a0 - a1) * FRAC_1_PI) * (ncap as f32)).ceil() as usize, 2, ncap);
         for i in 0..n {
@@ -665,12 +665,12 @@ fn round_join(verts: &mut Vec<Vertex>, p0: &Point, p1: &Point, lw: Scalar, rw: S
             let a = a0 + u * (a1 - a0);
             let rx = p1.x + a.cos() * rw;
             let ry = p1.y + a.sin() * rw;
-            append_vertex(verts, p1.x, p1.y, 0.5, 1.0);
-            append_vertex(verts, rx, ry, ru, 1.0);
+            add_vert(verts, p1.x, p1.y, 0.5, 1.0);
+            add_vert(verts, rx, ry, ru, 1.0);
         }
 
-        append_vertex(verts, lx1, ly1, lu, 1.0);
-        append_vertex(verts, p1.x - dlx1 * rw, p1.y - dly1 * rw, ru, 1.0);
+        add_vert(verts, lx1, ly1, lu, 1.0);
+        add_vert(verts, p1.x - dlx1 * rw, p1.y - dly1 * rw, ru, 1.0);
     } else {
         let (rx0, ry0, rx1, ry1) = choose_bevel(p1.flags & POINT_INNER_BEVEL, p0, p1, -rw);
 
@@ -684,8 +684,8 @@ fn round_join(verts: &mut Vec<Vertex>, p0: &Point, p1: &Point, lw: Scalar, rw: S
             }
         };
 
-        append_vertex(verts, p1.x + dlx0*rw, p1.y + dly0*rw, lu,1.0);
-        append_vertex(verts, rx0, ry0, ru,1.0);
+        add_vert(verts, p1.x + dlx0*rw, p1.y + dly0*rw, lu, 1.0);
+        add_vert(verts, rx0, ry0, ru, 1.0);
 
         let n = clamp((((a1 - a0) / PI) * (ncap as f32)).ceil() as usize, 2, ncap);
         for i in 0..n {
@@ -693,12 +693,12 @@ fn round_join(verts: &mut Vec<Vertex>, p0: &Point, p1: &Point, lw: Scalar, rw: S
             let a = a0 + u * (a1 - a0);
             let lx = p1.x + a.cos() * lw;
             let ly = p1.y + a.sin() * lw;
-            append_vertex(verts, lx, ly, lu, 1.0);
-            append_vertex(verts, p1.x, p1.y, 0.5, 1.0);
+            add_vert(verts, lx, ly, lu, 1.0);
+            add_vert(verts, p1.x, p1.y, 0.5, 1.0);
         }
 
-        append_vertex(verts, p1.x + dlx1*rw, p1.y + dly1*rw, lu,1.0);
-        append_vertex(verts, rx1, ry1, ru,1.0);
+        add_vert(verts, p1.x + dlx1*rw, p1.y + dly1*rw, lu, 1.0);
+        add_vert(verts, rx1, ry1, ru, 1.0);
     }
 }
 
@@ -798,10 +798,28 @@ fn butt_cap_start(verts: &mut Vec<Vertex>, p: &Point, dx: Scalar, dy: Scalar, w:
     let py = p.y - dy * d;
     let dlx = dy;
     let dly = -dx;
-    append_vertex(verts, px + dlx * w - dx * aa, py + dly * w - dy * aa, u0, 0.0);
-    append_vertex(verts, px - dlx * w - dx * aa, py - dly * w - dy * aa, u1, 0.0);
-    append_vertex(verts, px + dlx * w, py + dly * w, u0, 1.0);
-    append_vertex(verts, px - dlx * w, py - dly * w, u1, 1.0);
+    add_vert(verts, px + dlx * w - dx * aa, py + dly * w - dy * aa, u0, 0.0);
+    add_vert(verts, px - dlx * w - dx * aa, py - dly * w - dy * aa, u1, 0.0);
+    add_vert(verts, px + dlx * w, py + dly * w, u0, 1.0);
+    add_vert(verts, px - dlx * w, py - dly * w, u1, 1.0);
+}
+
+fn round_cap_start(verts: &mut Vec<Vertex>, p: &Point, dx: Scalar, dy: Scalar, w: Scalar, ncap: usize, _aa: Scalar, u0: Scalar, u1: Scalar) {
+    let px = p.x;
+    let py = p.y;
+    let dlx = dy;
+    let dly = -dx;
+
+    for i in 0..ncap {
+        let a = i as Scalar / (ncap - 1) as Scalar * PI;
+        let ax = a.cos() * w;
+        let ay = a.sin() * w;
+        add_vert(verts, px - dlx * ax - dx * ay, py - dly * ax - dy * ay, u0, 1.0);
+        add_vert(verts, px, py, 0.5, 1.0);
+    }
+
+    add_vert(verts, px + dlx * w, py + dly * w, u0, 1.0);
+    add_vert(verts, px - dlx * w, py - dly * w, u1, 1.0);
 }
 
 fn butt_cap_end(verts: &mut Vec<Vertex>, p: &Point, dx: Scalar, dy: Scalar, w: Scalar, d: Scalar, aa: Scalar, u0: Scalar, u1: Scalar) {
@@ -809,14 +827,32 @@ fn butt_cap_end(verts: &mut Vec<Vertex>, p: &Point, dx: Scalar, dy: Scalar, w: S
     let py = p.y + dy * d;
     let dlx = dy;
     let dly = -dx;
-    append_vertex(verts, px + dlx * w, py + dly * w, u0, 1.0);
-    append_vertex(verts, px - dlx * w, py - dly * w, u1, 1.0);
-    append_vertex(verts, px + dlx * w + dx * aa, py + dly * w + dy * aa, u0, 0.0);
-    append_vertex(verts, px - dlx * w + dx * aa, py - dly * w + dy * aa, u1, 0.0);
+    add_vert(verts, px + dlx * w, py + dly * w, u0, 1.0);
+    add_vert(verts, px - dlx * w, py - dly * w, u1, 1.0);
+    add_vert(verts, px + dlx * w + dx * aa, py + dly * w + dy * aa, u0, 0.0);
+    add_vert(verts, px - dlx * w + dx * aa, py - dly * w + dy * aa, u1, 0.0);
+}
+
+fn round_cap_end(verts: &mut Vec<Vertex>, p: &Point, dx: Scalar, dy: Scalar, w: Scalar, ncap: usize, _aa: Scalar, u0: Scalar, u1: Scalar) {
+    let px = p.x;
+    let py = p.y;
+    let dlx = dy;
+    let dly = -dx;
+
+    add_vert(verts, px + dlx * w, py + dly * w, u0, 1.0);
+    add_vert(verts, px - dlx * w, py - dly * w, u1, 1.0);
+
+    for i in 0..ncap {
+        let a = i as Scalar / (ncap - 1) as Scalar * PI;
+        let ax = a.cos() * w;
+        let ay = a.sin() * w;
+        add_vert(verts, px, py, 0.5, 1.0);
+        add_vert(verts, px - dlx * ax + dx * ay, py - dly * ax + dy * ay, u0, 1.0);
+    }
 }
 
 #[inline(always)]
-fn append_vertex(verts: &mut Vec<Vertex>, x: Scalar, y: Scalar, u: Scalar, v: Scalar) {
+fn add_vert(verts: &mut Vec<Vertex>, x: Scalar, y: Scalar, u: Scalar, v: Scalar) {
     verts.push(Vertex {
         x, y, u, v
     });
