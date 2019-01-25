@@ -5,4 +5,6 @@ authors = ["Coeuvre Wong <coeuvre@gmail.com>"]
 license = "MIT OR Apache-2.0"
 edition = "2018"
 
-[dependencies]
+[dev-dependencies]
+glutin = "0.19"
+gl = "0.11"
