@@ -1,0 +1,8 @@
+[package]
+name = "rdraw"
+version = "0.1.0"
+authors = ["Coeuvre Wong <coeuvre@gmail.com>"]
+license = "MIT OR Apache-2.0"
+edition = "2018"
+
+[dependencies]
