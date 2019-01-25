@@ -32,7 +32,7 @@ pub struct Color {
 }
 
 impl Color {
-    pub fn srgba(r: u8, g: u8, b: u8, a: u8) -> Color {
+    pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
         Color { r, g, b, a }
     }
 }
@@ -244,8 +244,8 @@ impl Default for State {
             line_join: LineJoin::Miter,
             miter_limit: 10.0,
             paint: Paint {
-                inner_color: Color::srgba(0, 0, 0, 255),
-                outer_color: Color::srgba(0, 0, 0, 255),
+                inner_color: Color::rgba(0, 0, 0, 255),
+                outer_color: Color::rgba(0, 0, 0, 255),
             },
             shape_anti_alias: true
         }
