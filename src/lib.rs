@@ -8,18 +8,20 @@ pub trait StrokeRenderer {
     fn render(&mut self, stroke: Stroke);
 }
 
+#[derive(Clone)]
 pub struct Scissor {
     pub transform: Transform,
     pub extent: [f32; 2],
 }
 
+#[derive(Clone)]
 pub struct Paint {
     pub transform: Transform,
     pub extent: [Scalar; 2],
     pub radius: Scalar,
     pub feather: Scalar,
-    pub inner_color: Color,
-    pub outer_color: Color,
+    pub inner_color: [f32; 4],
+    pub outer_color: [f32; 4],
     pub image: i32,
 }
 
@@ -40,13 +42,13 @@ impl<'a> Stroke<'a> {
     }
 
     #[inline(always)]
-    pub fn inner_color(&self) -> Color {
-        self.state.paint.inner_color
+    pub fn inner_color(&self) -> [f32; 4] {
+        self.state.stroke.inner_color
     }
 
     #[inline(always)]
-    pub fn outer_color(&self) -> Color {
-        self.state.paint.outer_color
+    pub fn outer_color(&self) -> [f32; 4] {
+        self.state.stroke.outer_color
     }
 
     #[inline(always)]
@@ -65,7 +67,7 @@ impl<'a> Stroke<'a> {
     }
 
     pub fn paint(&self) -> &Paint {
-        &self.state.paint
+        &self.state.stroke
     }
 }
 
@@ -201,8 +203,17 @@ impl Canvas {
     }
 
     pub fn set_stroke_color(&mut self, color: Color) {
-        self.state.paint.inner_color = color;
-        self.state.paint.outer_color = color;
+        self.state.stroke.inner_color = self.convert_color(color);
+        self.state.stroke.outer_color = self.convert_color(color);
+    }
+
+    fn convert_color(&self, color: Color) -> [f32; 4] {
+        [
+            color.r as f32 / 255.0,
+            color.g as f32 / 255.0,
+            color.b as f32 / 255.0,
+            color.a as f32 / 255.0,
+        ]
     }
 
     pub fn set_shape_anti_alias(&mut self, enabled: bool) {
@@ -241,18 +252,34 @@ impl Canvas {
     }
 
     pub fn stroke<R>(&mut self, renderer: &mut R) where R: StrokeRenderer {
+        let mut state = self.state.clone();
+        let stroke_paint = &mut state.stroke;
+
+        let scale = 1.0; // TODO: Get average scale from transform
+        let mut line_width = clamp(state.line_width * scale, 0.0, 200.0);
+
+        if line_width < self.fringe {
+            // If the stroke width is less than pixel size, use alpha to emulate coverage.
+            // Since coverage is area, scale by alpha*alpha.
+            let alpha = clamp(line_width / self.fringe, 0.0, 1.0);
+            stroke_paint.inner_color[3] *= alpha * alpha;
+            stroke_paint.outer_color[3] *= alpha * alpha;
+            line_width = self.fringe;
+        }
+
+        // TODO: Apply global alpha
+
         self.cache.flatten_paths(self.commands.iter(), self.tess_tol, self.dist_tol);
-        let state = &self.state;
 
         let fringe = if state.shape_anti_alias {
             self.fringe
         } else {
             0.0
         };
-        self.cache.expand_stroke(state.line_width * 0.5, fringe, state.line_cap, state.line_join, state.miter_limit, self.tess_tol);
+        self.cache.expand_stroke(line_width * 0.5, fringe, state.line_cap, state.line_join, state.miter_limit, self.tess_tol);
 
         let stroke = Stroke {
-            state: &self.state,
+            state: &state,
             cache: &self.cache,
             fringe,
         };
@@ -275,12 +302,13 @@ enum Command {
     Winding(Winding),
 }
 
+#[derive(Clone)]
 struct State {
     line_width: Scalar,
     line_cap: LineCap,
     line_join: LineJoin,
     miter_limit: Scalar,
-    paint: Paint,
+    stroke: Paint,
     shape_anti_alias: bool,
     scissor: Scissor,
 }
@@ -292,13 +320,13 @@ impl Default for State {
             line_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
             miter_limit: 10.0,
-            paint: Paint {
+            stroke: Paint {
                 transform: Transform::identity(),
                 extent: [0.0; 2],
                 radius: 0.0,
                 feather: 1.0,
-                inner_color: Color::rgba(0, 0, 0, 255),
-                outer_color: Color::rgba(0, 0, 0, 255),
+                inner_color: [0.0, 0.0, 0.0, 1.0],
+                outer_color: [0.0, 0.0, 0.0, 1.0],
                 image: 0,
             },
             shape_anti_alias: true,
@@ -310,6 +338,7 @@ impl Default for State {
     }
 }
 
+#[derive(Clone)]
 pub struct Transform {
     pub e: [f32; 6],
 }
@@ -319,7 +348,7 @@ impl Transform {
     pub fn identity() -> Self {
         Transform {
             e: [
-                0.0, 0.0,
+                1.0, 0.0,
                 0.0, 1.0,
                 0.0, 0.0,
             ]
@@ -841,7 +870,7 @@ fn round_join(verts: &mut Vec<Vertex>, p0: &Point, p1: &Point, lw: Scalar, rw: S
 }
 
 #[inline(always)]
-fn clamp(a: usize, mn: usize, mx: usize) -> usize {
+fn clamp<T>(a: T, mn: T, mx: T) -> T where T: PartialOrd {
     if a < mn {
         mn
     } else {

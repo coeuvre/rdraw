@@ -275,12 +275,12 @@ impl GlCanvasRenderer {
     }
 }
 
-fn convert_color(color: Color) -> [f32; 4] {
-    let a = normalize_color_comp(color.a);
+fn convert_color(color: [f32; 4]) -> [f32; 4] {
+    let a = color[3];
     [
-        normalize_color_comp(color.r) * a,
-        normalize_color_comp(color.g) * a,
-        normalize_color_comp(color.b) * a,
+        color[0] * a,
+        color[1] * a,
+        color[2] * a,
         a
     ]
 }
