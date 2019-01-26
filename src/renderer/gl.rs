@@ -2,15 +2,15 @@ use std::{
     mem::*,
     ffi::*,
     ptr::*,
-    rc::Rc,
 };
 use gl::types::*;
 
-use rdraw::*;
+use crate::*;
 
 pub struct GlCanvasRenderer {
     width: f32,
     height: f32,
+    pixels_per_point: f32,
     render_triangle_shader: RenderTriangleShader,
 }
 
@@ -21,18 +21,21 @@ impl GlCanvasRenderer {
             gl::BlendFunc(gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
 
             gl::Enable(gl::SCISSOR_TEST);
+//            gl::Enable(gl::MULTISAMPLE);
         }
 
         GlCanvasRenderer {
             width: 0.0,
             height: 0.0,
+            pixels_per_point: 1.0,
             render_triangle_shader: RenderTriangleShader::load(),
         }
     }
 
-    pub fn set_viewport_size(&mut self, width: f32, height: f32) {
+    pub fn set_viewport_size(&mut self, width: f32, height: f32, pixels_per_point: f32) {
         self.width = width;
         self.height = height;
+        self.pixels_per_point = pixels_per_point;
         unsafe {
             gl::Viewport(0, 0, self.width as i32, self.height as i32);
             gl::Scissor(0, 0, self.width as i32, self.height as i32);
@@ -57,8 +60,8 @@ impl StrokeRenderer for GlCanvasRenderer {
         let mut indices = Vec::with_capacity(nindices);
 
         let transform_pos = |pos: [f32; 2]| {
-            let x = pos[0];
-            let y = self.height - pos[1];
+            let x = pos[0] * self.pixels_per_point;
+            let y = self.height - pos[1] * self.pixels_per_point;
             let x = x / self.width * 2.0 - 1.0;
             let y = y / self.height * 2.0 - 1.0;
             [x, y]
@@ -108,7 +111,7 @@ struct Vertex {
 type Index = u32;
 
 struct RenderTriangleShader {
-    program: GLprogram,
+    program: GlProgram,
     vao: GLuint,
     vbo: GLuint,
     ebo: GLuint,
@@ -148,12 +151,12 @@ void main()
 
 impl RenderTriangleShader {
     pub fn load() -> RenderTriangleShader {
-        let mut program = GLprogram::new();
-        let mut vs = GLshader::new(gl::VERTEX_SHADER);
+        let mut program = GlProgram::new();
+        let mut vs = GlShader::new(gl::VERTEX_SHADER);
         vs.compile(RENDER_TRIANGLE_VERTEX_SHADER);
         program.attach(&vs);
 
-        let mut fs = GLshader::new(gl::FRAGMENT_SHADER);
+        let mut fs = GlShader::new(gl::FRAGMENT_SHADER);
         fs.compile(RENDER_TRIANGLE_FRAGMENT_SHADER);
         program.attach(&fs);
 
@@ -237,13 +240,13 @@ impl RenderTriangleShader {
     }
 }
 
-struct GLshader {
+struct GlShader {
     id: GLuint,
 }
 
-impl GLshader {
-    pub fn new(ty: GLenum) -> GLshader {
-        GLshader {
+impl GlShader {
+    pub fn new(ty: GLenum) -> GlShader {
+        GlShader {
             id: unsafe { gl::CreateShader(ty) },
         }
     }
@@ -257,33 +260,34 @@ impl GLshader {
             let mut success = 0;
             gl::GetShaderiv(self.id, gl::COMPILE_STATUS, &mut success);
             if success as u8 != gl::TRUE {
-                let mut buffer = Vec::with_capacity(512);
-                gl::GetShaderInfoLog(self.id, buffer.len() as i32, null_mut(), buffer.as_mut_ptr() as *mut i8);
-                panic!("{}", CString::new(buffer).unwrap().to_string_lossy())
+                let mut len = 0;
+                gl::GetShaderiv(self.id, gl::INFO_LOG_LENGTH, &mut len);
+                let mut buffer = Vec::with_capacity(len as usize);
+                gl::GetShaderInfoLog(self.id, len, null_mut(), buffer.as_mut_ptr() as *mut i8);
+                panic!("{}", CStr::from_ptr(buffer.as_ptr()).to_str().unwrap());
             }
         }
-
     }
 }
 
-impl Drop for GLshader {
+impl Drop for GlShader {
     fn drop(&mut self) {
         unsafe { gl::DeleteShader(self.id) }
     }
 }
 
-struct GLprogram {
+struct GlProgram {
     id: GLuint,
 }
 
-impl GLprogram {
-    pub fn new() -> GLprogram {
-        GLprogram {
+impl GlProgram {
+    pub fn new() -> GlProgram {
+        GlProgram {
             id: unsafe { gl::CreateProgram() },
         }
     }
 
-    pub fn attach(&mut self, shader: &GLshader) {
+    pub fn attach(&mut self, shader: &GlShader) {
         unsafe {
             gl::AttachShader(self.id, shader.id);
         }
@@ -296,9 +300,11 @@ impl GLprogram {
             let mut success = 0;
             gl::GetProgramiv(self.id, gl::LINK_STATUS, &mut success);
             if success as u8 != gl::TRUE {
-                let mut buffer = Vec::with_capacity(512);
-                gl::GetProgramInfoLog(self.id, buffer.len() as i32, null_mut(), buffer.as_mut_ptr() as *mut i8);
-                panic!("{}", CString::new(buffer).unwrap().to_string_lossy())
+                let mut len = 0;
+                gl::GetProgramiv(self.id, gl::INFO_LOG_LENGTH, &mut len);
+                let mut buffer = Vec::with_capacity(len as usize);
+                gl::GetProgramInfoLog(self.id, len, null_mut(), buffer.as_mut_ptr() as *mut i8);
+                panic!("{}", CStr::from_ptr(buffer.as_ptr()).to_str().unwrap());
             }
         }
     }
@@ -310,7 +316,7 @@ impl GLprogram {
     }
 }
 
-impl Drop for GLprogram {
+impl Drop for GlProgram {
     fn drop(&mut self) {
         unsafe { gl::DeleteProgram(self.id); }
     }

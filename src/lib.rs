@@ -1,3 +1,7 @@
+mod renderer;
+
+pub use renderer::gl::*;
+
 pub trait CanvasRenderer: StrokeRenderer {}
 
 pub trait StrokeRenderer {
