@@ -8,9 +8,26 @@ pub trait StrokeRenderer {
     fn render(&mut self, stroke: Stroke);
 }
 
+pub struct Scissor {
+    pub transform: Transform,
+    pub extent: [f32; 2],
+}
+
+pub struct Paint {
+    pub transform: Transform,
+    pub extent: [Scalar; 2],
+    pub radius: Scalar,
+    pub feather: Scalar,
+    pub inner_color: Color,
+    pub outer_color: Color,
+    pub image: i32,
+}
+
+
 pub struct Stroke<'a> {
-    color: Color,
+    state: &'a State,
     cache: &'a PathCache,
+    fringe: Scalar,
 }
 
 impl<'a> Stroke<'a> {
@@ -22,8 +39,33 @@ impl<'a> Stroke<'a> {
         }
     }
 
-    pub fn color(&self) -> Color {
-        self.color
+    #[inline(always)]
+    pub fn inner_color(&self) -> Color {
+        self.state.paint.inner_color
+    }
+
+    #[inline(always)]
+    pub fn outer_color(&self) -> Color {
+        self.state.paint.outer_color
+    }
+
+    #[inline(always)]
+    pub fn line_width(&self) -> Scalar {
+        self.state.line_width
+    }
+
+    #[inline(always)]
+    pub fn fringe(&self) -> Scalar {
+        self.fringe
+    }
+
+    #[inline(always)]
+    pub fn scissor(&self) -> &Scissor {
+        &self.state.scissor
+    }
+
+    pub fn paint(&self) -> &Paint {
+        &self.state.paint
     }
 }
 
@@ -210,9 +252,11 @@ impl Canvas {
         self.cache.expand_stroke(state.line_width * 0.5, fringe, state.line_cap, state.line_join, state.miter_limit, self.tess_tol);
 
         let stroke = Stroke {
-            color: self.state.paint.outer_color,
+            state: &self.state,
             cache: &self.cache,
+            fringe,
         };
+
         renderer.render(stroke);
     }
 }
@@ -238,6 +282,7 @@ struct State {
     miter_limit: Scalar,
     paint: Paint,
     shape_anti_alias: bool,
+    scissor: Scissor,
 }
 
 impl Default for State {
@@ -248,18 +293,59 @@ impl Default for State {
             line_join: LineJoin::Miter,
             miter_limit: 10.0,
             paint: Paint {
+                transform: Transform::identity(),
+                extent: [0.0; 2],
+                radius: 0.0,
+                feather: 1.0,
                 inner_color: Color::rgba(0, 0, 0, 255),
                 outer_color: Color::rgba(0, 0, 0, 255),
+                image: 0,
             },
-            shape_anti_alias: true
+            shape_anti_alias: true,
+            scissor: Scissor {
+                transform: Transform::identity(),
+                extent: [-1.0; 2],
+            },
         }
     }
 }
 
-struct Paint {
-    inner_color: Color,
-    outer_color: Color,
+pub struct Transform {
+    pub e: [f32; 6],
 }
+
+impl Transform {
+    #[inline(always)]
+    pub fn identity() -> Self {
+        Transform {
+            e: [
+                0.0, 0.0,
+                0.0, 1.0,
+                0.0, 0.0,
+            ]
+        }
+    }
+
+    pub fn inverse(&self) -> Transform {
+        let det = self.e[0] as f64 * self.e[3] as f64 - self.e[2] as f64 * self.e[1] as f64;
+        if det > -1e-6 && det < 1e-6 {
+            return Transform::identity();
+        }
+        let invdet = 1.0 / det;
+
+        Transform {
+            e: [
+                (self.e[3] as f64 * invdet) as f32,
+                (-self.e[1] as f64 * invdet) as f32,
+                (-self.e[2] as f64 * invdet) as f32,
+                (self.e[0] as f64 * invdet) as f32,
+                ((self.e[2] as f64 * self.e[5] as f64 - self.e[3] as f64 * self.e[4] as f64) * invdet) as f32,
+                ((self.e[1] as f64 * self.e[4] as f64 - self.e[0] as f64 * self.e[5] as f64) * invdet) as f32,
+            ]
+        }
+    }
+}
+
 
 struct PathBuilder {
     first: usize,

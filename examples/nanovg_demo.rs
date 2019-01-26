@@ -122,6 +122,7 @@ fn main() {
         .with_dimensions((1000, 600).into());
 
     let context = ContextBuilder::new()
+        .with_gl_profile(GlProfile::Core)
 //        .with_multisampling(4)
         .with_vsync(true);
     let gl_window = GlWindow::new(window, context, &events_loop).unwrap();
@@ -161,6 +162,8 @@ fn main() {
         renderer.set_viewport_size(physical_size.width as f32, physical_size.height as f32, dpi_factor as f32);
         canvas.set_pixels_per_point(dpi_factor as f32);
         render_demo(&mut renderer, &mut canvas, logical_size.width as f32, logical_size.height as f32, t);
+
+        renderer.flush();
 
         gl_window.swap_buffers().unwrap();
 
