@@ -175,7 +175,7 @@ impl StrokeRenderer for GlCanvasRenderer {
             uniforms.radius = paint.radius;
             uniforms.feather = paint.feather;
             let inv_transform = paint.transform.inverse();
-            uniforms.paint_mat = convert_transform(&inv_transform);
+            uniforms.paint_mat = convert_transform(inv_transform);
         }
 
         let call = DrawCall {
@@ -217,6 +217,7 @@ impl GlCanvasRenderer {
                 gl::StencilFunc(gl::ALWAYS, 0, 0xffffffff);
                 gl::ActiveTexture(gl::TEXTURE0);
                 gl::BindTexture(gl::TEXTURE_2D, 0);
+//                gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
 
                 gl::BindBuffer(gl::UNIFORM_BUFFER, self.ubo);
                 gl::BufferData(
@@ -285,7 +286,7 @@ fn convert_color(color: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-fn convert_transform(t: &Transform) -> [f32; 12] {
+fn convert_transform(t: Transform) -> [f32; 12] {
     [
         t.e[0], t.e[1], 0.0, 0.0,
         t.e[2], t.e[3], 0.0, 0.0,

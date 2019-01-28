@@ -10,6 +10,6 @@ out vec2 f_pos;
 
 void main() {
     f_tex_coord = v_tex_coord;
-    f_pos = f_pos;
+    f_pos = v_pos;
     gl_Position = vec4(2.0 * v_pos.x / u_view_size.x - 1.0, 1.0 - 2.0 * v_pos.y / u_view_size.y, 0, 1);
 }

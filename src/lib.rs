@@ -338,7 +338,7 @@ impl Default for State {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Transform {
     pub e: [f32; 6],
 }
