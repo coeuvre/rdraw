@@ -167,6 +167,6 @@ fn main() {
 
         gl_window.swap_buffers().unwrap();
 
-        t += 0.0016;
+        t += 0.016;
     }
 }

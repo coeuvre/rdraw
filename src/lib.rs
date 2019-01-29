@@ -286,6 +286,22 @@ impl Canvas {
 
         renderer.render(stroke);
     }
+
+    pub fn fill(&mut self) {
+        let mut state = self.state.clone();
+
+        self.cache.flatten_paths(self.commands.iter(), self.tess_tol, self.dist_tol);
+
+        let fringe = if state.shape_anti_alias {
+            self.fringe
+        } else {
+            0.0
+        };
+
+        self.cache.expand_fill(self.fringe, fringe, LineJoin::Miter, 2.4);
+
+        // TODO: Apply global alpha
+    }
 }
 
 type Scalar = f32;
@@ -461,7 +477,7 @@ impl PathCache {
                 }
             }
 
-            for (p0, p1) in edges_iter_mut(points) {
+            for (p0, p1) in edge_iter_mut(points) {
                 // Calculate segment direction and length
                 let (dx, dy, len) = normalize(p1.x - p0.x, p1.y - p0.y);
                 p0.dx = dx;
@@ -622,6 +638,111 @@ impl PathCache {
         }
     }
 
+    fn expand_fill(&mut self, aa: Scalar, w: Scalar, line_join: LineJoin, miter_limit: Scalar) {
+        let fringe = w > 0.0;
+        self.calculate_joins(w, line_join, miter_limit);
+
+        // Calculate max vertex usage.
+        let mut cverts = 0;
+        for path in self.paths.iter() {
+            cverts += path.count + path.nbevel + 1;
+            if fringe {
+                cverts += (path.count + path.nbevel * 5 + 1) * 2; // plus one for loop
+            }
+        }
+
+        self.verts.clear();
+        self.verts.reserve(cverts);
+
+        let verts = &mut self.verts;
+
+        let convex = self.paths.len() == 1 && self.paths[0].convex;
+
+        for path in self.paths.iter_mut() {
+            let first = verts.len();
+            let points = &self.points[path.first..(path.first + path.count)];
+            // Calculate shape vertices.
+            let woff = 0.5 * aa;
+
+            if fringe {
+                // Looping
+                let mut p0 = &points[path.count - 1];
+                let mut p1_index = 0;
+                let mut p1 = &points[p1_index];
+                for _ in 0..path.count {
+                    if p1.flags & POINT_BEVEL != 0 {
+                        let dlx0 = p0.dy;
+                        let dly0 = -p0.dx;
+                        let dlx1 = p1.dy;
+                        let dly1 = -p1.dx;
+                        if p1.flags & POINT_LEFT != 0 {
+                            let lx = p1.x + p1.dmx * woff;
+                            let ly = p1.y + p1.dmy * woff;
+                            add_vert(verts, lx, ly, 0.5, 1.0);
+                        } else {
+                            let lx0 = p1.x + dlx0 * woff;
+                            let ly0 = p1.y + dly0 * woff;
+                            let lx1 = p1.x + dlx1 * woff;
+                            let ly1 = p1.y + dly1 * woff;
+                            add_vert(verts, lx0, ly0, 0.5, 1.0);
+                            add_vert(verts, lx1, ly1, 0.5, 1.0);
+                        }
+                    } else {
+                        add_vert(verts, p1.x + (p1.dmx * woff), p1.y + (p1.dmy * woff), 0.5, 1.0);
+                    }
+                    p0 = p1;
+                    p1_index += 1;
+                    p1 = &points[p1_index];
+                }
+            } else {
+                for point in points {
+                    add_vert(verts, point.x, point.y, 0.5, 1.0);
+                }
+            }
+
+            path.fill = Some(PathVertexRef { first, count: verts.len() - first });
+
+            // Calculate fringe
+            if fringe {
+                let first = verts.len();
+
+                let mut lw = w + woff;
+                let rw = w - woff;
+                let mut lu = 0.0;
+                let ru = 1.0;
+
+                // Create only half a fringe for convex shapes so that
+                // the shape can be rendered without stenciling.
+                if convex {
+                    lw = woff;	// This should generate the same vertex as fill inset above.
+                    lu = 0.5;	// Set outline fade at middle.
+                }
+
+                // Looping
+                let mut p0 = &points[path.count - 1];
+                let mut p1_index = 0;
+                let mut p1 = &points[p1_index];
+
+                for _ in 0..path.count {
+                    if (p1.flags & (POINT_BEVEL | POINT_INNER_BEVEL)) != 0 {
+                        bevel_join(verts, p0, p1, lw, rw, lu, ru, aa);
+                    } else {
+                        add_vert(verts, p1.x + (p1.dmx * lw), p1.y + (p1.dmy * lw), lu, 1.0);
+                        add_vert(verts, p1.x - (p1.dmx * rw), p1.y - (p1.dmy * rw), ru, 1.0);
+                    }
+                }
+
+                // Loop it
+                add_vert(verts, verts[0].x, verts[0].y, lu, 1.0);
+                add_vert(verts, verts[1].x, verts[1].y, ru, 1.0);
+
+                path.stroke = Some(PathVertexRef { first, count: verts.len() - first });
+            } else {
+                path.stroke = None;
+            }
+        }
+    }
+
     fn calculate_joins(&mut self, w: Scalar, line_join: LineJoin, miter_limit: Scalar) {
         let mut nleft = 0;
         let mut iw = 0.0;
@@ -633,7 +754,7 @@ impl PathCache {
         for path in self.paths.iter_mut() {
             path.nbevel = 0;
             let points = &mut self.points[path.first..(path.first + path.count)];
-            for (p0, p1) in edges_iter_mut(points) {
+            for (p0, p1) in edge_iter_mut(points) {
                 let dlx0 = p0.dy;
                 let dly0 = -p0.dx;
                 let dlx1 = p1.dy;
@@ -1048,7 +1169,7 @@ impl<'a, T> Iterator for EdgeIterMut<'a, T> {
     }
 }
 
-fn edges_iter_mut<T>(points: &mut [T]) -> EdgeIterMut<T> {
+fn edge_iter_mut<T>(points: &mut [T]) -> EdgeIterMut<T> {
     EdgeIterMut {
         from: points.len() - 1,
         to: 0,
@@ -1063,7 +1184,7 @@ mod test {
     #[test]
     fn test_edges_iter_mut() {
         let mut points = vec![100.0, 200.0, 300.0];
-        let edges = edges_iter_mut(points.as_mut())
+        let edges = edge_iter_mut(points.as_mut())
             .map(|(from, to)| (*from, *to))
             .collect::<Vec<_>>();
         assert_eq!(edges, vec![(300.0, 100.0), (100.0, 200.0), (200.0, 300.0)]);
