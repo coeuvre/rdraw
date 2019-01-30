@@ -5,7 +5,7 @@ pub use renderer::gl::*;
 pub trait CanvasRenderer: StrokeRenderer {}
 
 pub trait StrokeRenderer {
-    fn render(&mut self, stroke: Stroke);
+    fn render(&mut self, paint: &Paint, scissor: &Scissor, fringe: Scalar, line_width: Scalar, paths: Paths);
 }
 
 #[derive(Clone)]
@@ -25,51 +25,62 @@ pub struct Paint {
     pub image: i32,
 }
 
-
-pub struct Stroke<'a> {
-    state: &'a State,
+pub struct Paths<'a> {
     cache: &'a PathCache,
-    fringe: Scalar,
 }
 
-impl<'a> Stroke<'a> {
-    pub fn path_iter(&self) -> impl Iterator<Item=Path> {
+impl<'a> Paths<'a> {
+    pub fn iter(&self) -> PathIter {
         PathIter {
             cache: self.cache,
             index: 0,
-            stroke: true,
         }
     }
-
-    #[inline(always)]
-    pub fn inner_color(&self) -> [f32; 4] {
-        self.state.stroke.inner_color
-    }
-
-    #[inline(always)]
-    pub fn outer_color(&self) -> [f32; 4] {
-        self.state.stroke.outer_color
-    }
-
-    #[inline(always)]
-    pub fn line_width(&self) -> Scalar {
-        self.state.line_width
-    }
-
-    #[inline(always)]
-    pub fn fringe(&self) -> Scalar {
-        self.fringe
-    }
-
-    #[inline(always)]
-    pub fn scissor(&self) -> &Scissor {
-        &self.state.scissor
-    }
-
-    pub fn paint(&self) -> &Paint {
-        &self.state.stroke
-    }
 }
+
+//pub struct Stroke<'a> {
+//    state: &'a State,
+//    cache: &'a PathCache,
+//    fringe: Scalar,
+//}
+//
+//impl<'a> Stroke<'a> {
+//    pub fn path_iter(&self) -> impl Iterator<Item=Path> {
+//        PathIter {
+//            cache: self.cache,
+//            index: 0,
+//        }
+//    }
+//
+//    #[inline(always)]
+//    pub fn inner_color(&self) -> [f32; 4] {
+//        self.state.stroke.inner_color
+//    }
+//
+//    #[inline(always)]
+//    pub fn outer_color(&self) -> [f32; 4] {
+//        self.state.stroke.outer_color
+//    }
+//
+//    #[inline(always)]
+//    pub fn line_width(&self) -> Scalar {
+//        self.state.line_width
+//    }
+//
+//    #[inline(always)]
+//    pub fn fringe(&self) -> Scalar {
+//        self.fringe
+//    }
+//
+//    #[inline(always)]
+//    pub fn scissor(&self) -> &Scissor {
+//        &self.state.scissor
+//    }
+//
+//    pub fn paint(&self) -> &Paint {
+//        &self.state.stroke
+//    }
+//}
 
 #[derive(Copy, Clone)]
 pub struct Color {
@@ -88,7 +99,6 @@ impl Color {
 pub struct PathIter<'a> {
     cache: &'a PathCache,
     index: usize,
-    stroke: bool,
 }
 
 impl<'a> Iterator for PathIter<'a> {
@@ -97,16 +107,11 @@ impl<'a> Iterator for PathIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(path) = self.cache.paths.get(self.index) {
             self.index += 1;
-            let vertex_ref = if self.stroke {
-                path.stroke.as_ref().unwrap()
-            } else {
-                path.fill.as_ref().unwrap()
-            };
             Some(Path {
                 path,
                 verts: &self.cache.verts,
-                first: vertex_ref.first,
-                count: vertex_ref.count,
+                stroke: path.stroke,
+                fill: path.fill,
             })
         } else {
             None
@@ -117,13 +122,17 @@ impl<'a> Iterator for PathIter<'a> {
 pub struct Path<'a> {
     path: &'a PathBuilder,
     verts: &'a [Vertex],
-    first: usize,
-    count: usize,
+    stroke: Option<PathVertexRef>,
+    fill: Option<PathVertexRef>,
 }
 
 impl<'a> Path<'a> {
-    pub fn verts(&self) -> &[Vertex] {
-        &self.verts[self.first..(self.first + self.count)]
+    pub fn stroke(&self) -> Option<&[Vertex]> {
+        if let Some(ref stroke) = self.stroke {
+            Some(&self.verts[stroke.first..(stroke.first + stroke.count)])
+        } else {
+            None
+        }
     }
 
     pub fn closed(&self) -> bool {
@@ -278,13 +287,11 @@ impl Canvas {
         };
         self.cache.expand_stroke(line_width * 0.5, fringe, state.line_cap, state.line_join, state.miter_limit, self.tess_tol);
 
-        let stroke = Stroke {
-            state: &state,
+        let paths = Paths {
             cache: &self.cache,
-            fringe,
         };
 
-        renderer.render(stroke);
+        renderer.render(&state.stroke, &state.scissor, fringe, state.line_width, paths);
     }
 
     pub fn fill(&mut self) {
@@ -403,6 +410,7 @@ struct PathBuilder {
     fill: Option<PathVertexRef>,
 }
 
+#[derive(Copy, Clone)]
 struct PathVertexRef {
     first: usize,
     count: usize,

@@ -115,10 +115,10 @@ impl GlCanvasRenderer {
 impl CanvasRenderer for GlCanvasRenderer {}
 
 impl StrokeRenderer for GlCanvasRenderer {
-    fn render(&mut self, stroke: Stroke) {
+    fn render(&mut self, paint: &Paint, scissor: &Scissor, fringe: Scalar, line_width: Scalar, paths: Paths) {
         let mut maxverts: u32 = 0;
         let mut npaths: u32 = 0;
-        for path in stroke.path_iter() {
+        for path in paths.iter() {
             maxverts += path.verts.len() as u32;
             npaths += 1;
         }
@@ -129,31 +129,30 @@ impl StrokeRenderer for GlCanvasRenderer {
         let mut vert_offset = self.verts.len() as u32;
         self.verts.reserve(maxverts as _);
 
-        for path in stroke.path_iter() {
-            let nverts = path.verts.len() as u32;
-            let r = BufferRef {
-                stroke_offset: vert_offset,
-                stroke_count: nverts,
+        for path in paths.iter() {
+            if let Some(stroke) = path.stroke() {
+                let nverts = stroke.len() as u32;
+                let r = BufferRef {
+                    stroke_offset: vert_offset,
+                    stroke_count: nverts,
 //                fill_count: 0,
 //                fill_offset: 0,
-            };
-            self.paths.push(r);
-            self.verts.extend(path.verts.iter().map(|vert| ShaderVertex {
-                pos: [vert.x, vert.y],
-                tex_coord: [vert.u, vert.v],
-            }));
-            vert_offset += nverts;
+                };
+                self.paths.push(r);
+                self.verts.extend(stroke.iter().map(|vert| ShaderVertex {
+                    pos: [vert.x, vert.y],
+                    tex_coord: [vert.u, vert.v],
+                }));
+                vert_offset += nverts;
+            }
         }
-
-        let scissor = stroke.scissor();
-        let paint = stroke.paint();
 
         let uniform_index = self.uniform_buffer.alloc(1);
         {
             let uniforms = self.uniform_buffer.get_mut(uniform_index);
             *uniforms = unsafe { std::mem::zeroed() };
-            uniforms.inner_col = convert_color(stroke.inner_color());
-            uniforms.outer_col = convert_color(stroke.outer_color());
+            uniforms.inner_col = convert_color(paint.inner_color);
+            uniforms.outer_col = convert_color(paint.outer_color);
 
             if scissor.extent[0] < -0.5 || scissor.extent[1] < -0.5 {
                 uniforms.scissor_mat = [0.0; 12];
@@ -165,8 +164,7 @@ impl StrokeRenderer for GlCanvasRenderer {
 
             uniforms.extent = paint.extent;
 
-            let fringe = stroke.fringe();
-            uniforms.stroke_mult = (stroke.line_width() * 0.5 + fringe * 0.5) / fringe;
+            uniforms.stroke_mult = (line_width * 0.5 + fringe * 0.5) / fringe;
             uniforms.stroke_thr = -1.0;
 
             // TODO: Texture
