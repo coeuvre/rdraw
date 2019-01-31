@@ -46,34 +46,6 @@ impl GlCanvasRenderer {
             frag_size = size_of::<Uniforms>() + align as usize - size_of::<Uniforms>() % align as usize;
 
             gl::Finish();
-//            gl::EnableVertexAttribArray(0);
-//            gl::VertexAttribPointer(
-//                0, 2, gl::FLOAT, gl::FALSE,
-//                size_of::<Vertex>() as i32,
-//                offset_of!(Vertex, pos) as *const _
-//            );
-//
-//            gl::EnableVertexAttribArray(1);
-//            gl::VertexAttribPointer(
-//                1, 2, gl::FLOAT, gl::FALSE,
-//                size_of::<Vertex>() as i32,
-//                offset_of!(Vertex, tex_coord) as *const _
-//            );
-//
-//            gl::EnableVertexAttribArray(2);
-//            gl::VertexAttribPointer(
-//                2, 4, gl::FLOAT, gl::FALSE,
-//                size_of::<Vertex>() as i32,
-//                offset_of!(Vertex, color) as *const _
-//            );
-//
-//            gl::BindVertexArray(0);
-//
-//            gl::Enable(gl::BLEND);
-//            gl::BlendFunc(gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
-
-//            gl::Enable(gl::SCISSOR_TEST);
-//            gl::Enable(gl::MULTISAMPLE);
         }
 
         GlCanvasRenderer {
@@ -110,70 +82,74 @@ impl GlCanvasRenderer {
             gl::Clear(gl::COLOR_BUFFER_BIT);
         }
     }
+
+    fn add_paths(&mut self, path: &Path) -> u32 {
+        let mut vertex_offset = self.verts.len() as u32;
+        let mut r = BufferRef {
+            stroke_offset: 0,
+            stroke_count: 0,
+            fill_count: 0,
+            fill_offset: 0,
+        };
+
+        if let Some(stroke) = path.stroke() {
+            let nverts = stroke.len() as u32;
+            self.verts.extend(stroke.iter().map(|vert| ShaderVertex {
+                pos: [vert.x, vert.y],
+                tex_coord: [vert.u, vert.v],
+            }));
+            r.stroke_offset = vertex_offset;
+            r.stroke_count = nverts;
+            vertex_offset += nverts;
+        }
+
+        if let Some(fill) = path.fill() {
+            let nverts = fill.len() as u32;
+            self.verts.extend(fill.iter().map(|vert| ShaderVertex {
+                pos: [vert.x, vert.y],
+                tex_coord: [vert.u, vert.v],
+            }));
+            r.fill_offset = vertex_offset;
+            r.fill_count = nverts;
+            vertex_offset += nverts;
+        }
+
+        self.paths.push(r);
+
+        vertex_offset
+    }
+
+    fn add_verts(&mut self, x: Scalar, y: Scalar, u: Scalar, v: Scalar) {
+        self.verts.push(ShaderVertex {
+            pos: [x, y],
+            tex_coord: [u, v],
+        })
+    }
 }
 
-impl CanvasRenderer for GlCanvasRenderer {}
-
-impl StrokeRenderer for GlCanvasRenderer {
-    fn render(&mut self, paint: &Paint, scissor: &Scissor, fringe: Scalar, line_width: Scalar, paths: Paths) {
+impl CanvasRenderer for GlCanvasRenderer {
+    fn stroke(&mut self, paint: &Paint, scissor: &Scissor, fringe: Scalar, line_width: Scalar, paths: Paths) {
         let mut maxverts: u32 = 0;
         let mut npaths: u32 = 0;
         for path in paths.iter() {
-            maxverts += path.verts.len() as u32;
+            maxverts += path.stroke().map(|stroke| stroke.len()).unwrap_or(0) as u32;
             npaths += 1;
         }
 
         let path_offset = self.paths.len() as u32;
         self.paths.reserve(npaths as _);
 
-        let mut vert_offset = self.verts.len() as u32;
         self.verts.reserve(maxverts as _);
 
         for path in paths.iter() {
-            if let Some(stroke) = path.stroke() {
-                let nverts = stroke.len() as u32;
-                let r = BufferRef {
-                    stroke_offset: vert_offset,
-                    stroke_count: nverts,
-//                fill_count: 0,
-//                fill_offset: 0,
-                };
-                self.paths.push(r);
-                self.verts.extend(stroke.iter().map(|vert| ShaderVertex {
-                    pos: [vert.x, vert.y],
-                    tex_coord: [vert.u, vert.v],
-                }));
-                vert_offset += nverts;
-            }
+            self.add_paths(&path);
         }
 
         let uniform_index = self.uniform_buffer.alloc(1);
         {
             let uniforms = self.uniform_buffer.get_mut(uniform_index);
             *uniforms = unsafe { std::mem::zeroed() };
-            uniforms.inner_col = convert_color(paint.inner_color);
-            uniforms.outer_col = convert_color(paint.outer_color);
-
-            if scissor.extent[0] < -0.5 || scissor.extent[1] < -0.5 {
-                uniforms.scissor_mat = [0.0; 12];
-                uniforms.scissor_ext = [1.0, 1.0];
-                uniforms.scissor_scale = [1.0, 1.0];
-            } else {
-                unimplemented!();
-            }
-
-            uniforms.extent = paint.extent;
-
-            uniforms.stroke_mult = (line_width * 0.5 + fringe * 0.5) / fringe;
-            uniforms.stroke_thr = -1.0;
-
-            // TODO: Texture
-
-            uniforms.ty = SHADER_FILL_GRADIENT;
-            uniforms.radius = paint.radius;
-            uniforms.feather = paint.feather;
-            let inv_transform = paint.transform.inverse();
-            uniforms.paint_mat = convert_transform(inv_transform);
+            convert_paint(uniforms, paint, scissor, line_width, fringe, -1.0);
         }
 
         let call = DrawCall {
@@ -193,6 +169,68 @@ impl StrokeRenderer for GlCanvasRenderer {
             },
         };
 
+        self.draw_calls.push(call);
+    }
+
+    fn fill(&mut self, paint: &Paint, scissor: &Scissor, fringe: Scalar, bounds: [Scalar; 4], paths: Paths) {
+        let ty = DrawCallType::Fill;
+        let triangle_count = 4;
+        let mut maxverts: u32 = 0;
+        let mut npaths: u32 = 0;
+        for path in paths.iter() {
+            maxverts += path.stroke().map(|stroke| stroke.len()).unwrap_or(0) as u32;
+            npaths += 1;
+        }
+
+        maxverts += triangle_count;
+
+        let path_offset = self.paths.len() as u32;
+        self.paths.reserve(npaths as _);
+
+        let mut vert_offset = self.verts.len() as u32;
+        self.verts.reserve(maxverts as _);
+
+        for path in paths.iter() {
+            vert_offset = self.add_paths(&path);
+        }
+
+        let triangle_offset = vert_offset;
+        self.add_verts(bounds[2], bounds[3], 0.5, 1.0);
+        self.add_verts(bounds[2], bounds[1], 0.5, 1.0);
+        self.add_verts(bounds[0], bounds[3], 0.5, 1.0);
+        self.add_verts(bounds[0], bounds[1], 0.5, 1.0);
+
+        let uniform_index = self.uniform_buffer.alloc(2);
+        {
+            // Simple shader for stencil
+            let uniforms = self.uniform_buffer.get_mut(uniform_index);
+            *uniforms = unsafe { std::mem::zeroed() };
+            uniforms.stroke_thr = -1.0;
+            uniforms.ty = SHADER_SIMPLE;
+        }
+        {
+            // Fill shader
+            let uniforms = self.uniform_buffer.get_mut(uniform_index + 1);
+            *uniforms = unsafe { std::mem::zeroed() };
+            convert_paint(uniforms, paint, scissor, fringe, fringe, -1.0);
+        }
+
+        let call = DrawCall {
+            ty,
+            path_offset,
+            path_count: npaths,
+            triangle_offset,
+            triangle_count,
+            uniform_offset: self.uniform_buffer.offset(uniform_index) as u32,
+            color: convert_color(paint.inner_color),
+            image: 0,
+            blend_func: BlendFunc {
+                src_rgb: gl::ONE,
+                dst_rgb: gl::ONE_MINUS_SRC_ALPHA,
+                src_alpha: gl::ONE,
+                dst_alpha: gl::ONE_MINUS_SRC_ALPHA,
+            },
+        };
         self.draw_calls.push(call);
     }
 }
@@ -251,7 +289,7 @@ impl GlCanvasRenderer {
                 gl::Uniform2fv(self.shader.loc_view_size, 1, view_size.as_ptr());
 
                 for draw_call in self.draw_calls.iter() {
-                    draw_call.draw(&self.paths, self.ubo);
+                    draw_call.draw(&self.paths, self.ubo, self.uniform_buffer.uniform_size as _);
                 }
 
                 gl::DisableVertexAttribArray(0);
@@ -292,9 +330,31 @@ fn convert_transform(t: Transform) -> [f32; 12] {
     ]
 }
 
-#[inline(always)]
-fn normalize_color_comp(c: u8) -> f32 {
-    c as f32 / 255.0
+fn convert_paint(uniforms: &mut Uniforms, paint: &Paint, scissor: &Scissor, width: Scalar, fringe: Scalar, stroke_thr: Scalar) {
+    uniforms.inner_col = convert_color(paint.inner_color);
+    uniforms.outer_col = convert_color(paint.outer_color);
+
+    if scissor.extent[0] < -0.5 || scissor.extent[1] < -0.5 {
+        uniforms.scissor_mat = [0.0; 12];
+        uniforms.scissor_ext = [1.0, 1.0];
+        uniforms.scissor_scale = [1.0, 1.0];
+    } else {
+        unimplemented!();
+    }
+
+    uniforms.extent = paint.extent;
+
+    uniforms.stroke_mult = (width * 0.5 + fringe * 0.5) / fringe;
+    uniforms.stroke_thr = stroke_thr;
+
+    // TODO: Texture
+
+    uniforms.ty = SHADER_FILL_GRADIENT;
+    uniforms.radius = paint.radius;
+    uniforms.feather = paint.feather;
+    let inv_transform = paint.transform.inverse();
+
+    uniforms.paint_mat = convert_transform(inv_transform);
 }
 
 struct DrawCall {
@@ -318,25 +378,68 @@ enum DrawCallType {
 }
 
 impl DrawCall {
-    unsafe fn draw(&self, paths: &[BufferRef], ubo: GLuint) {
+    unsafe fn draw(&self, paths: &[BufferRef], ubo: GLuint, uniform_size: u32) {
         let blend = &self.blend_func;
         gl::BlendFuncSeparate(blend.src_rgb, blend.dst_rgb, blend.src_alpha, blend.dst_alpha);
         match self.ty {
             DrawCallType::Stroke => self.stroke(paths, ubo),
+            DrawCallType::Fill => self.fill(paths, ubo, uniform_size),
             _ => {},
         }
     }
 
     unsafe fn stroke(&self, paths: &[BufferRef], ubo: GLuint) {
+        let paths = &paths[self.path_offset as usize..(self.path_offset + self.path_count) as usize];
+
         gl::BindBufferRange(gl::UNIFORM_BUFFER, FRAG_BINDING, ubo, self.uniform_offset as _, size_of::<Uniforms>() as _);
 
         // TODO: Texture
         gl::BindTexture(gl::TEXTURE_2D, 0);
 
-        let paths = &paths[self.path_offset as usize..(self.path_offset + self.path_count) as usize];
         for path in paths.iter() {
             gl::DrawArrays(gl::TRIANGLE_STRIP, path.stroke_offset as _, path.stroke_count as _);
         }
+    }
+
+    unsafe fn fill(&self, paths: &[BufferRef], ubo: GLuint, uniform_size: u32) {
+        let paths = &paths[self.path_offset as usize..(self.path_offset + self.path_count) as usize];
+
+        // Draw shapes
+        gl::Enable(gl::STENCIL_TEST);
+        gl::StencilMask(0xff);
+        gl::StencilFunc(gl::ALWAYS, 0, 0xff);
+        gl::ColorMask(gl::FALSE, gl::FALSE, gl::FALSE, gl::FALSE);
+
+        gl::BindBufferRange(gl::UNIFORM_BUFFER, FRAG_BINDING, ubo, self.uniform_offset as _, size_of::<Uniforms>() as _);
+        gl::StencilOpSeparate(gl::FRONT, gl::KEEP, gl::KEEP, gl::INCR_WRAP);
+        gl::StencilOpSeparate(gl::BACK, gl::KEEP, gl::KEEP, gl::DECR_WRAP);
+        gl::Disable(gl::CULL_FACE);
+        for path in paths.iter() {
+            gl::DrawArrays(gl::TRIANGLE_FAN, path.fill_offset as _, path.fill_count as _);
+        }
+        gl::Enable(gl::CULL_FACE);
+
+        // Draw anti-aliased pixels
+        gl::ColorMask(gl::TRUE, gl::TRUE, gl::TRUE, gl::TRUE);
+
+        gl::BindBufferRange(gl::UNIFORM_BUFFER, FRAG_BINDING, ubo, (self.uniform_offset + uniform_size) as _, size_of::<Uniforms>() as _);
+
+        // Anti-alias
+        {
+            gl::StencilFunc(gl::EQUAL, 0x0, 0xff);
+            gl::StencilOp(gl::KEEP, gl::KEEP, gl::KEEP);
+            // Draw fringes
+            for path in paths.iter() {
+                gl::DrawArrays(gl::TRIANGLE_STRIP, path.stroke_offset as _, path.stroke_count as _);
+            }
+        }
+
+        // Draw fill
+        gl::StencilFunc(gl::NOTEQUAL, 0x0, 0xff);
+        gl::StencilOp(gl::ZERO, gl::ZERO, gl::ZERO);
+        gl::DrawArrays(gl::TRIANGLE_STRIP, self.triangle_offset as _, self.triangle_count as _);
+
+        gl::Disable(gl::STENCIL_TEST);
     }
 }
 
@@ -404,8 +507,8 @@ impl UniformBuffer {
 }
 
 struct BufferRef {
-//    fill_offset: u32,
-//    fill_count: u32,
+    fill_offset: u32,
+    fill_count: u32,
     stroke_offset: u32,
     stroke_count: u32,
 }

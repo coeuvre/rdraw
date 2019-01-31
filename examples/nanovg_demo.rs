@@ -29,6 +29,17 @@ fn draw_graph(renderer: &mut GlCanvasRenderer, canvas: &mut Canvas, x: f32, y: f
         sy[i] = y + h * samples[i] * 0.8;
     }
 
+    // Graph background
+    let bg = canvas.linear_gradient(x, y, x, y + h, Color::rgba(0, 160, 192, 0), Color::rgba(0, 160, 192, 64));
+    canvas.begin_path()
+        .move_to(sx[0], sy[0]);
+    for i in 1..6 {
+        canvas.bezier_to(sx[i - 1] + dx * 0.5, sy[i - 1], sx[i] - dx * 0.5, sy[i], sx[i], sy[i]);
+    }
+    canvas.line_to(x + w, y + h);
+    canvas.line_to(x, y + h);
+    canvas.set_fill_paint(&bg);
+    canvas.fill(renderer);
 
     // Graph line
     canvas.begin_path()
@@ -38,7 +49,7 @@ fn draw_graph(renderer: &mut GlCanvasRenderer, canvas: &mut Canvas, x: f32, y: f
         canvas.bezier_to(sx[i - 1] + dx * 0.5, sy[i - 1] + 2.0, sx[i] - dx * 0.5, sy[i] + 2.0, sx[i], sy[i] + 2.0);
     }
     canvas.set_stroke_color(Color::rgba(0, 0, 0, 32));
-    canvas.set_line_width(3.0);
+    canvas.set_stroke_width(3.0);
     canvas.stroke(renderer);
 
     canvas.begin_path()
@@ -47,8 +58,33 @@ fn draw_graph(renderer: &mut GlCanvasRenderer, canvas: &mut Canvas, x: f32, y: f
         canvas.bezier_to(sx[i - 1] + dx * 0.5, sy[i - 1], sx[i] - dx * 0.5, sy[i], sx[i], sy[i]);
     }
     canvas.set_stroke_color(Color::rgba(0, 160, 192, 255));
-    canvas.set_line_width(3.0);
+    canvas.set_stroke_width(3.0);
     canvas.stroke(renderer);
+
+    // Graph sample pos
+    for i in 0..6 {
+        let bg = canvas.radial_gradient(sx[i], sy[i] + 2.0, 3.0, 8.0, Color::rgba(0, 0, 0, 32), Color::rgba(0, 0, 0, 0));
+        canvas.set_fill_paint(&bg);
+        canvas.begin_path()
+            .rect(sx[i] - 10.0, sy[i] - 10.0 + 2.0, 20.0, 20.0)
+            .fill(renderer);
+    }
+
+    canvas.begin_path();
+    for i in 0..6 {
+        canvas.circle(sx[i], sy[i], 4.0);
+    }
+    canvas.set_fill_color(Color::rgba(0,160,192,255));
+    canvas.fill(renderer);
+
+    canvas.begin_path();
+    for i in 0..6 {
+        canvas.circle(sx[i], sy[i], 2.0);
+    }
+    canvas.set_fill_color(Color::rgba(220,220,220,255));
+    canvas.fill(renderer);
+
+    canvas.set_stroke_width(1.0);
 }
 
 fn draw_lines(renderer: &mut GlCanvasRenderer, canvas: &mut Canvas, x: f32, y: f32, w: f32, _h: f32, t: f32) {
@@ -76,7 +112,7 @@ fn draw_lines(renderer: &mut GlCanvasRenderer, canvas: &mut Canvas, x: f32, y: f
             canvas.set_line_cap(*cap);
             canvas.set_line_join(*join);
 
-            canvas.set_line_width(s * 0.3);
+            canvas.set_stroke_width(s * 0.3);
             canvas.set_stroke_color(Color::rgba(0, 0, 0, 160));
 
             canvas.begin_path()
@@ -89,7 +125,7 @@ fn draw_lines(renderer: &mut GlCanvasRenderer, canvas: &mut Canvas, x: f32, y: f
             canvas.set_line_cap(LineCap::Butt);
             canvas.set_line_join(LineJoin::Miter);
 
-            canvas.set_line_width(1.0);
+            canvas.set_stroke_width(1.0);
             canvas.set_stroke_color(Color::rgba(0, 192, 255, 255));
             canvas.begin_path()
                 .move_to(fx + pts[0], fy + pts[1])
@@ -106,7 +142,7 @@ fn draw_widths(renderer: &mut GlCanvasRenderer, canvas: &mut Canvas, x: f32, mut
 
     for i in 0..20 {
         let width = (i as f32 + 0.5) * 0.1;
-        canvas.set_line_width(width);
+        canvas.set_stroke_width(width);
         canvas.begin_path()
             .move_to(x, y)
             .line_to(x + length, y + length * 0.3)

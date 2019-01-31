@@ -1,11 +1,12 @@
 mod renderer;
 
+use std::ops::Mul;
+
 pub use renderer::gl::*;
 
-pub trait CanvasRenderer: StrokeRenderer {}
-
-pub trait StrokeRenderer {
-    fn render(&mut self, paint: &Paint, scissor: &Scissor, fringe: Scalar, line_width: Scalar, paths: Paths);
+pub trait CanvasRenderer {
+    fn stroke(&mut self, paint: &Paint, scissor: &Scissor, fringe: Scalar, line_width: Scalar, paths: Paths);
+    fn fill(&mut self, paint: &Paint, scissor: &Scissor, fringe: Scalar, bounds: [Scalar; 4], paths: Paths);
 }
 
 #[derive(Clone)]
@@ -25,6 +26,20 @@ pub struct Paint {
     pub image: i32,
 }
 
+impl Paint {
+    pub fn color(color: [f32; 4]) -> Self {
+        Paint {
+            transform: Transform::identity(),
+            extent: [0.0, 0.0],
+            radius: 0.0,
+            feather: 1.0,
+            inner_color: color,
+            outer_color: color,
+            image: 0,
+        }
+    }
+}
+
 pub struct Paths<'a> {
     cache: &'a PathCache,
 }
@@ -37,50 +52,6 @@ impl<'a> Paths<'a> {
         }
     }
 }
-
-//pub struct Stroke<'a> {
-//    state: &'a State,
-//    cache: &'a PathCache,
-//    fringe: Scalar,
-//}
-//
-//impl<'a> Stroke<'a> {
-//    pub fn path_iter(&self) -> impl Iterator<Item=Path> {
-//        PathIter {
-//            cache: self.cache,
-//            index: 0,
-//        }
-//    }
-//
-//    #[inline(always)]
-//    pub fn inner_color(&self) -> [f32; 4] {
-//        self.state.stroke.inner_color
-//    }
-//
-//    #[inline(always)]
-//    pub fn outer_color(&self) -> [f32; 4] {
-//        self.state.stroke.outer_color
-//    }
-//
-//    #[inline(always)]
-//    pub fn line_width(&self) -> Scalar {
-//        self.state.line_width
-//    }
-//
-//    #[inline(always)]
-//    pub fn fringe(&self) -> Scalar {
-//        self.fringe
-//    }
-//
-//    #[inline(always)]
-//    pub fn scissor(&self) -> &Scissor {
-//        &self.state.scissor
-//    }
-//
-//    pub fn paint(&self) -> &Paint {
-//        &self.state.stroke
-//    }
-//}
 
 #[derive(Copy, Clone)]
 pub struct Color {
@@ -130,6 +101,14 @@ impl<'a> Path<'a> {
     pub fn stroke(&self) -> Option<&[Vertex]> {
         if let Some(ref stroke) = self.stroke {
             Some(&self.verts[stroke.first..(stroke.first + stroke.count)])
+        } else {
+            None
+        }
+    }
+
+    pub fn fill(&self) -> Option<&[Vertex]> {
+        if let Some(ref fill) = self.fill {
+            Some(&self.verts[fill.first..(fill.first + fill.count)])
         } else {
             None
         }
@@ -192,6 +171,10 @@ impl Canvas {
         canvas
     }
 
+    pub fn reset(&mut self) {
+        self.state = State::default();
+    }
+
     pub fn set_pixels_per_point(&mut self, pixels_per_point: Scalar) {
         self.pixels_per_point = pixels_per_point;
         self.tess_tol = 0.25 / pixels_per_point;
@@ -199,7 +182,7 @@ impl Canvas {
         self.fringe = 1.0 / pixels_per_point;
     }
 
-    pub fn set_line_width(&mut self, line_width: Scalar) {
+    pub fn set_stroke_width(&mut self, line_width: Scalar) {
         self.state.line_width = line_width;
     }
 
@@ -212,8 +195,7 @@ impl Canvas {
     }
 
     pub fn set_stroke_color(&mut self, color: Color) {
-        self.state.stroke.inner_color = self.convert_color(color);
-        self.state.stroke.outer_color = self.convert_color(color);
+        self.state.stroke = Paint::color(self.convert_color(color));
     }
 
     fn convert_color(&self, color: Color) -> [f32; 4] {
@@ -227,6 +209,56 @@ impl Canvas {
 
     pub fn set_shape_anti_alias(&mut self, enabled: bool) {
         self.state.shape_anti_alias = enabled;
+    }
+
+    pub fn linear_gradient(&self, sx: Scalar, sy: Scalar, ex: Scalar, ey: Scalar, inner_col: Color, outer_col: Color) -> Paint {
+        const LARGE: Scalar = 1e5;
+        // Calculate transform aligned to the line
+        let mut dx = ex - sx;
+        let mut dy = ey - sy;
+        let d = (dx*dx + dy*dy).sqrt();
+        if d > 0.0001 {
+            dx /= d;
+            dy /= d;
+        } else {
+            dx = 0.0;
+            dy = 1.0;
+        }
+
+        Paint {
+            transform: Transform {
+                e: [
+                    dy, -dx,
+                    dx, dy,
+                    sx - dx * LARGE, sy - dy * LARGE,
+                ]
+            },
+            extent: [LARGE, LARGE + d * 0.5],
+            radius: 0.0,
+            feather: d.max(1.0),
+            inner_color: self.convert_color(inner_col),
+            outer_color: self.convert_color(outer_col),
+            image: 0,
+        }
+    }
+
+    pub fn radial_gradient(&self, cx: Scalar, cy: Scalar, inr: Scalar, outr: Scalar, icol: Color, ocol: Color) -> Paint {
+        let r = (inr + outr) * 0.5;
+        let f = outr - inr;
+
+        let mut t = Transform::identity();
+        t.e[4] = cx;
+        t.e[5] = cy;
+
+        Paint {
+            transform: t,
+            extent: [r, r],
+            radius: r,
+            feather: f.max(1.0),
+            inner_color: self.convert_color(icol),
+            outer_color: self.convert_color(ocol),
+            image: 0,
+        }
     }
 
     pub fn begin_path(&mut self) -> &mut Self {
@@ -260,7 +292,29 @@ impl Canvas {
         self
     }
 
-    pub fn stroke<R>(&mut self, renderer: &mut R) where R: StrokeRenderer {
+    pub fn rect(&mut self, x: Scalar, y: Scalar, w: Scalar, h: Scalar) -> &mut Self {
+        self.move_to(x, y)
+            .line_to(x, y + h)
+            .line_to(x + w, y + h)
+            .line_to(x + w, y)
+            .close_path()
+    }
+
+    pub fn ellipse(&mut self, cx: Scalar, cy: Scalar, rx: Scalar, ry: Scalar) -> &mut Self {
+        const NVG_KAPPA90: Scalar = 0.5522847493;    // Length proportional to radius of a cubic bezier handle for 90deg arcs.
+        self.move_to(cx - rx, cy)
+            .bezier_to(cx - rx, cy + ry * NVG_KAPPA90, cx - rx * NVG_KAPPA90, cy + ry, cx, cy + ry)
+            .bezier_to(cx + rx * NVG_KAPPA90, cy + ry, cx + rx, cy + ry * NVG_KAPPA90, cx + rx, cy)
+            .bezier_to(cx + rx, cy - ry * NVG_KAPPA90, cx + rx * NVG_KAPPA90, cy - ry, cx, cy - ry)
+            .bezier_to(cx - rx * NVG_KAPPA90, cy - ry, cx - rx, cy - ry * NVG_KAPPA90, cx - rx, cy)
+            .close_path()
+    }
+
+    pub fn circle(&mut self, cx: Scalar, cy: Scalar, r: Scalar) -> &mut Self {
+        self.ellipse(cx, cy, r, r)
+    }
+
+    pub fn stroke<R>(&mut self, renderer: &mut R) where R: CanvasRenderer {
         let mut state = self.state.clone();
         let stroke_paint = &mut state.stroke;
 
@@ -287,15 +341,19 @@ impl Canvas {
         };
         self.cache.expand_stroke(line_width * 0.5, fringe, state.line_cap, state.line_join, state.miter_limit, self.tess_tol);
 
-        let paths = Paths {
-            cache: &self.cache,
-        };
-
-        renderer.render(&state.stroke, &state.scissor, fringe, state.line_width, paths);
+        renderer.stroke(&state.stroke, &state.scissor, fringe, state.line_width, Paths { cache: &self.cache });
     }
 
-    pub fn fill(&mut self) {
-        let mut state = self.state.clone();
+    pub fn set_fill_paint(&mut self, paint: &Paint) {
+        self.state.fill = paint.clone();
+    }
+
+    pub fn set_fill_color(&mut self, color: Color) {
+        self.state.fill = Paint::color(self.convert_color(color));
+    }
+
+    pub fn fill<R>(&mut self, renderer: &mut R) where R: CanvasRenderer {
+        let state = self.state.clone();
 
         self.cache.flatten_paths(self.commands.iter(), self.tess_tol, self.dist_tol);
 
@@ -308,6 +366,8 @@ impl Canvas {
         self.cache.expand_fill(self.fringe, fringe, LineJoin::Miter, 2.4);
 
         // TODO: Apply global alpha
+
+        renderer.fill(&state.fill, &state.scissor, fringe, self.cache.bounds, Paths { cache: &self.cache });
     }
 }
 
@@ -332,6 +392,7 @@ struct State {
     line_join: LineJoin,
     miter_limit: Scalar,
     stroke: Paint,
+    fill: Paint,
     shape_anti_alias: bool,
     scissor: Scissor,
 }
@@ -343,15 +404,8 @@ impl Default for State {
             line_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
             miter_limit: 10.0,
-            stroke: Paint {
-                transform: Transform::identity(),
-                extent: [0.0; 2],
-                radius: 0.0,
-                feather: 1.0,
-                inner_color: [0.0, 0.0, 0.0, 1.0],
-                outer_color: [0.0, 0.0, 0.0, 1.0],
-                image: 0,
-            },
+            stroke: Paint::color([0.0, 0.0, 0.0, 1.0]),
+            fill: Paint::color([1.0, 1.0, 1.0, 1.0]),
             shape_anti_alias: true,
             scissor: Scissor {
                 transform: Transform::identity(),
@@ -395,6 +449,27 @@ impl Transform {
                 ((self.e[1] as f64 * self.e[4] as f64 - self.e[0] as f64 * self.e[5] as f64) * invdet) as f32,
             ]
         }
+    }
+}
+
+impl Mul<Transform> for Transform {
+    type Output = Transform;
+
+    fn mul(self, rhs: Transform) -> Self::Output {
+        let t = &self.e;
+        let s = &rhs.e;
+        let t0 = t[0] * s[0] + t[1] * s[2];
+        let t2 = t[2] * s[0] + t[3] * s[2];
+        let t4 = t[4] * s[0] + t[5] * s[2] + s[4];
+
+        let mut e = [0.0; 6];
+        e[1] = t[0] * s[1] + t[1] * s[3];
+        e[3] = t[2] * s[1] + t[3] * s[3];
+        e[5] = t[4] * s[1] + t[5] * s[3] + s[5];
+        e[0] = t0;
+        e[2] = t2;
+        e[4] = t4;
+        Transform { e }
     }
 }
 
@@ -676,8 +751,8 @@ impl PathCache {
                 // Looping
                 let mut p0 = &points[path.count - 1];
                 let mut p1_index = 0;
-                let mut p1 = &points[p1_index];
                 for _ in 0..path.count {
+                    let p1 = &points[p1_index];
                     if p1.flags & POINT_BEVEL != 0 {
                         let dlx0 = p0.dy;
                         let dly0 = -p0.dx;
@@ -700,7 +775,6 @@ impl PathCache {
                     }
                     p0 = p1;
                     p1_index += 1;
-                    p1 = &points[p1_index];
                 }
             } else {
                 for point in points {
@@ -729,20 +803,22 @@ impl PathCache {
                 // Looping
                 let mut p0 = &points[path.count - 1];
                 let mut p1_index = 0;
-                let mut p1 = &points[p1_index];
 
                 for _ in 0..path.count {
+                    let p1 = &points[p1_index];
                     if (p1.flags & (POINT_BEVEL | POINT_INNER_BEVEL)) != 0 {
                         bevel_join(verts, p0, p1, lw, rw, lu, ru, aa);
                     } else {
                         add_vert(verts, p1.x + (p1.dmx * lw), p1.y + (p1.dmy * lw), lu, 1.0);
                         add_vert(verts, p1.x - (p1.dmx * rw), p1.y - (p1.dmy * rw), ru, 1.0);
                     }
+                    p0 = p1;
+                    p1_index += 1;
                 }
 
                 // Loop it
-                add_vert(verts, verts[0].x, verts[0].y, lu, 1.0);
-                add_vert(verts, verts[1].x, verts[1].y, ru, 1.0);
+                add_vert(verts, verts[first].x, verts[first].y, lu, 1.0);
+                add_vert(verts, verts[first + 1].x, verts[first + 1].y, ru, 1.0);
 
                 path.stroke = Some(PathVertexRef { first, count: verts.len() - first });
             } else {

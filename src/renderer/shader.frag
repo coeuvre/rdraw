@@ -65,6 +65,7 @@ void main() {
         result = color;
     } else if (type == 1) { // image
     } else if (type == 2) { // Stencil fill
+		result = vec4(1,1,1,1);
     } else if (type == 3) { // Textured tris
     }
 
